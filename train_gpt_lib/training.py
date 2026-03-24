@@ -11,6 +11,7 @@ from torch import Tensor, nn
 from .config import Hyperparameters
 from .data import DistributedTokenLoader
 from .eval import eval_val
+from .lr_schedulers import get_scheduler
 from .optim import Muon
 from .serialization import dequantize_state_dict_int8, quantize_state_dict_int8
 
@@ -33,7 +34,7 @@ def run_training(
     has_leading_space_lut: Tensor,
     is_boundary_token_lut: Tensor,
     log0: Callable[[str, bool], None],
-    on_train_log: Callable[[int, float], None] | None = None,
+    on_train_log: Callable[[int, float, float], None] | None = None,
     on_val_log: Callable[[int, float, float, float, float], None] | None = None,
 ) -> float:
     grad_scale = 1.0 / grad_accum_steps
@@ -43,16 +44,10 @@ def run_training(
         for opt in optimizers:
             opt.zero_grad(set_to_none=True)
 
+    _scheduler = get_scheduler(args.lr_schedule)
+
     def lr_mul(step: int, elapsed_ms: float) -> float:
-        if args.warmdown_iters <= 0:
-            return 1.0
-        if max_wallclock_ms is None:
-            warmdown_start = max(args.iterations - args.warmdown_iters, 0)
-            return max((args.iterations - step) / max(args.warmdown_iters, 1), 0.0) if warmdown_start <= step < args.iterations else 1.0
-        step_ms = elapsed_ms / max(step, 1)
-        warmdown_ms = args.warmdown_iters * step_ms
-        remaining_ms = max(max_wallclock_ms - elapsed_ms, 0.0)
-        return remaining_ms / max(warmdown_ms, 1e-9) if remaining_ms <= warmdown_ms else 1.0
+        return _scheduler(step, args.iterations, args.warmdown_iters, elapsed_ms, max_wallclock_ms)
 
     def eval_val_full_precision() -> tuple[float, float]:
         return eval_val(
@@ -193,11 +188,11 @@ def run_training(
         )
         if should_log_train:
             log0(
-                f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
+                f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} lr_scale:{scale:.4f} "
                 f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
             )
         if on_train_log is not None and step % max(args.comet_log_train_every, 1) == 0:
-            on_train_log(step, float(train_loss.item()))
+            on_train_log(step, float(train_loss.item()), scale)
 
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
         if distributed and max_wallclock_ms is not None:

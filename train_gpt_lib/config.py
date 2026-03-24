@@ -50,6 +50,13 @@ class Hyperparameters:
     compile_fullgraph = bool(int(os.environ.get("COMPILE_FULLGRAPH", "1")))
     compile_dynamic = bool(int(os.environ.get("COMPILE_DYNAMIC", "0")))
 
+    # LR scheduler (see train_gpt_lib/lr_schedulers.py for options).
+    lr_schedule = os.environ.get("LR_SCHEDULE", "trapezoid")
+
+    # Optimizer strategy (see train_gpt_lib/optim.py OPTIMIZER_REGISTRY for options).
+    optimizer = os.environ.get("OPTIMIZER", "muon_adam")
+    adamw_weight_decay = float(os.environ.get("ADAMW_WEIGHT_DECAY", "0.1"))
+
     # Optimizer hyperparameters.
     embed_lr = float(os.environ.get("EMBED_LR", 0.6))
     head_lr = float(os.environ.get("HEAD_LR", 0.008))

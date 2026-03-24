@@ -24,6 +24,14 @@ def zeropower_via_newtonschulz5(G: Tensor, steps: int = 10, eps: float = 1e-7) -
 
 class Muon(torch.optim.Optimizer):
     def __init__(self, params, lr: float, momentum: float, backend_steps: int, nesterov: bool = True):
+        params = list(params)
+        if not params:
+            # Null / no-op Muon: satisfies the interface without requiring real params.
+            # param_groups stays empty; step() is a no-op.
+            self.defaults = dict(lr=lr, momentum=momentum, backend_steps=backend_steps, nesterov=nesterov)
+            self.state: dict = {}
+            self.param_groups: list = []
+            return
         super().__init__(
             params,
             dict(lr=lr, momentum=momentum, backend_steps=backend_steps, nesterov=nesterov),
@@ -80,10 +88,27 @@ class Muon(torch.optim.Optimizer):
         return loss
 
 
+# Supported optimizer strategy names.
+OPTIMIZER_REGISTRY: tuple[str, ...] = (
+    "muon_adam",       # Muon for matrices + Adam for rest  [default]
+    "muon_adamw",      # Muon for matrices + AdamW for rest
+    "muon_steps3",     # Muon (3 Newton-Schulz iters) + Adam
+    "muon_steps10",    # Muon (10 Newton-Schulz iters) + Adam
+    "muon_mom90",      # Muon momentum=0.90 + Adam
+    "muon_mom98",      # Muon momentum=0.98 + Adam
+    "adam",            # Adam everywhere (no Muon)
+    "adamw",           # AdamW everywhere (weight_decay via args.adamw_weight_decay)
+)
+
+
 def build_optimizers(
     args: Hyperparameters,
     base_model: GPT,
 ) -> tuple[list[torch.optim.Optimizer], Muon]:
+    opt_name = args.optimizer
+    if opt_name not in OPTIMIZER_REGISTRY:
+        raise ValueError(f"Unknown optimizer={opt_name!r}. Available: {list(OPTIMIZER_REGISTRY)}")
+
     block_named_params = list(base_model.blocks.named_parameters())
     matrix_params = [
         p
@@ -98,34 +123,74 @@ def build_optimizers(
     if base_model.skip_weights.numel() > 0:
         scalar_params.append(base_model.skip_weights)
 
+    # Per-strategy Muon hyperparameter overrides.
+    muon_backend_steps = args.muon_backend_steps
+    muon_momentum = args.muon_momentum
+    if opt_name == "muon_steps3":
+        muon_backend_steps = 3
+    elif opt_name == "muon_steps10":
+        muon_backend_steps = 10
+    elif opt_name == "muon_mom90":
+        muon_momentum = 0.90
+    elif opt_name == "muon_mom98":
+        muon_momentum = 0.98
+
+    use_muon = opt_name not in ("adam", "adamw")
+    use_adamw_for_rest = opt_name in ("adamw", "muon_adamw")
+
+    adam_cls_rest = torch.optim.AdamW if use_adamw_for_rest else torch.optim.Adam
+    wd_rest = args.adamw_weight_decay if use_adamw_for_rest else 0.0
+
     token_lr = args.tied_embed_lr if args.tie_embeddings else args.embed_lr
-    optimizer_tok = torch.optim.Adam(
+
+    optimizer_tok = adam_cls_rest(
         [{"params": [base_model.tok_emb.weight], "lr": token_lr, "base_lr": token_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
+        weight_decay=wd_rest,
         fused=True,
     )
-    optimizer_muon = Muon(
-        matrix_params,
-        lr=args.matrix_lr,
-        momentum=args.muon_momentum,
-        backend_steps=args.muon_backend_steps,
-    )
-    for group in optimizer_muon.param_groups:
-        group["base_lr"] = args.matrix_lr
-    optimizer_scalar = torch.optim.Adam(
+
+    if use_muon:
+        optimizer_muon = Muon(
+            matrix_params,
+            lr=args.matrix_lr,
+            momentum=muon_momentum,
+            backend_steps=muon_backend_steps,
+        )
+        for group in optimizer_muon.param_groups:
+            group["base_lr"] = args.matrix_lr
+        matrix_opt: torch.optim.Optimizer = optimizer_muon
+    else:
+        # No Muon: put matrix params into Adam/AdamW; keep a null Muon for interface compatibility.
+        optimizer_muon = Muon([], lr=0.0, momentum=0.0, backend_steps=1)
+        adam_cls_mat = torch.optim.AdamW if opt_name == "adamw" else torch.optim.Adam
+        wd_mat = args.adamw_weight_decay if opt_name == "adamw" else 0.0
+        matrix_opt = adam_cls_mat(
+            [{"params": matrix_params, "lr": args.matrix_lr, "base_lr": args.matrix_lr}],
+            betas=(args.beta1, args.beta2),
+            eps=args.adam_eps,
+            weight_decay=wd_mat,
+            fused=True,
+        )
+
+    optimizer_scalar = adam_cls_rest(
         [{"params": scalar_params, "lr": args.scalar_lr, "base_lr": args.scalar_lr}],
         betas=(args.beta1, args.beta2),
         eps=args.adam_eps,
+        weight_decay=wd_rest,
         fused=True,
     )
-    optimizers: list[torch.optim.Optimizer] = [optimizer_tok, optimizer_muon, optimizer_scalar]
+
+    optimizers: list[torch.optim.Optimizer] = [optimizer_tok, matrix_opt, optimizer_scalar]
     if base_model.lm_head is not None:
-        optimizer_head = torch.optim.Adam(
+        optimizer_head = adam_cls_rest(
             [{"params": [base_model.lm_head.weight], "lr": args.head_lr, "base_lr": args.head_lr}],
             betas=(args.beta1, args.beta2),
             eps=args.adam_eps,
+            weight_decay=wd_rest,
             fused=True,
         )
         optimizers.insert(1, optimizer_head)
+
     return optimizers, optimizer_muon
