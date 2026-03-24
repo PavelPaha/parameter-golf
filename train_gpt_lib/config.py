@@ -27,10 +27,6 @@ class Hyperparameters:
     warmup_steps = int(os.environ.get("WARMUP_STEPS", 20))
     train_batch_tokens = int(os.environ.get("TRAIN_BATCH_TOKENS", 524_288))
     train_seq_len = int(os.environ.get("TRAIN_SEQ_LEN", 1024))
-    # Batch packing: optional synthetic PAD prefix + window shift to fit more BOS (doc starts) in x.
-    pack_batches = bool(int(os.environ.get("PACK_BATCHES", "0")))
-    bos_id = int(os.environ.get("BOS_ID", "1"))
-    pad_token_id = int(os.environ.get("PAD_TOKEN_ID", "0"))
     max_wallclock_seconds = float(os.environ.get("MAX_WALLCLOCK_SECONDS", 600.0))
     qk_gain_init = float(os.environ.get("QK_GAIN_INIT", 1.5))
 

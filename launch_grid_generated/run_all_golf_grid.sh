@@ -1,7 +1,4 @@
-#!/usr/bin/env bash
 set -euo pipefail
-# Авто-сгенерировано из check_model_size.ipynb
-# Запуск по очереди: при ошибке в одном скрипте — остановка (set -e)
 export COMET_API_KEY="wKvWIXBmWdm5O9w8buIWrqKEV"
 export PACK_BATCHES=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -262,5 +262,4 @@ class GPT(nn.Module):
                 raise RuntimeError("lm_head is required when tie_embeddings=False")
             logits_proj = self.lm_head(x)
         logits = self.logit_softcap * torch.tanh(logits_proj / self.logit_softcap)
-        # ignore_index=-100 for optional padding / packed targets (mean is over non-ignored only).
-        return F.cross_entropy(logits.float(), targets, reduction="mean", ignore_index=-100)
+        return F.cross_entropy(logits.float(), targets, reduction="mean")

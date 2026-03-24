@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch import Tensor, nn
 
 from .config import Hyperparameters
-from .data import DistributedPackedTokenLoader, DistributedTokenLoader
+from .data import DistributedTokenLoader
 from .eval import eval_val
 from .optim import Muon
 from .serialization import dequantize_state_dict_int8, quantize_state_dict_int8
@@ -22,7 +22,7 @@ def run_training(
     base_model: nn.Module,
     optimizer_muon: Muon,
     optimizers: list[torch.optim.Optimizer],
-    train_loader: DistributedTokenLoader | DistributedPackedTokenLoader,
+    train_loader: DistributedTokenLoader,
     rank: int,
     world_size: int,
     distributed: bool,
@@ -114,18 +114,7 @@ def run_training(
         zero_grad_all()
         if distributed:
             model.require_backward_grad_sync = True
-        train_loader = (
-            DistributedPackedTokenLoader(
-                args.train_files,
-                rank,
-                world_size,
-                device,
-                bos_id=args.bos_id,
-                pad_id=args.pad_token_id,
-            )
-            if args.pack_batches
-            else DistributedTokenLoader(args.train_files, rank, world_size, device)
-        )
+        train_loader = DistributedTokenLoader(args.train_files, rank, world_size, device)
 
     training_time_ms = 0.0
     stop_after_step: int | None = None
