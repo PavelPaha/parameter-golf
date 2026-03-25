@@ -23,6 +23,7 @@ import train_gpt_lib.optim as optim_mod
 from train_gpt_lib.config import Hyperparameters
 from train_gpt_lib.comet_tracker import CometTracker
 from train_gpt_lib.data import DistributedTokenLoader, build_sentencepiece_luts, load_validation_tokens
+from train_gpt_lib.flash_attention import describe as flash_attn_describe, is_available as flash_attn_is_available
 from train_gpt_lib.model import CastedLinear, GPT, restore_low_dim_params_to_fp32
 from train_gpt_lib.optim import build_optimizers
 from train_gpt_lib.serialization import save_and_validate_roundtrip
@@ -118,6 +119,13 @@ def main() -> None:
     log0(f"train_loader:dataset:{dataset_dir.name} train_shards:{actual_train_files}")
     log0(f"val_loader:shards pattern={args.val_files} tokens:{val_tokens.numel() - 1}")
 
+    flash_ver = args.flash_attn_version
+    if flash_ver in (2, 3) and not flash_attn_is_available(flash_ver):
+        raise RuntimeError(
+            f"USE_FLASHATTENTION{flash_ver}=1 but flash_attn is not installed. "
+            "Run: pip install flash-attn"
+        )
+
     base_model = GPT(
         vocab_size=args.vocab_size,
         num_layers=args.num_layers,
@@ -132,6 +140,7 @@ def main() -> None:
         qk_gain_init=args.qk_gain_init,
         hyper_conn_type=(args.mhc_type if args.use_mhc else "none"),
         hyper_conn_n=args.mhc_num_streams,
+        flash_attn_version=flash_ver,
     ).to(device).bfloat16()
     for module in base_model.modules():
         if isinstance(module, CastedLinear):
@@ -167,6 +176,7 @@ def main() -> None:
     log0(f"compile:global={args.use_compile} model={compile_model} muon={compile_muon}")
     log0(f"world_size:{world_size} grad_accum_steps:{grad_accum_steps}")
     log0("sdp_backends:cudnn=False flash=True mem_efficient=False math=False")
+    log0(f"flash_attn:{flash_attn_describe()} active_version={flash_ver if flash_ver else 'torch_sdpa'}")
     log0(f"attention_mode:gqa num_heads:{args.num_heads} num_kv_heads:{args.num_kv_heads}")
     log0(
         f"tie_embeddings:{args.tie_embeddings} embed_lr:{token_lr} "

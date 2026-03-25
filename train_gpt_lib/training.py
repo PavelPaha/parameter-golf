@@ -34,7 +34,7 @@ def run_training(
     has_leading_space_lut: Tensor,
     is_boundary_token_lut: Tensor,
     log0: Callable[[str, bool], None],
-    on_train_log: Callable[[int, float, float], None] | None = None,
+    on_train_log: Callable[[int, float, float, float], None] | None = None,
     on_val_log: Callable[[int, float, float, float, float], None] | None = None,
 ) -> float:
     grad_scale = 1.0 / grad_accum_steps
@@ -174,8 +174,10 @@ def run_training(
             for group in opt.param_groups:
                 group["lr"] = group["base_lr"] * scale
 
-        if args.grad_clip_norm > 0:
-            torch.nn.utils.clip_grad_norm_(base_model.parameters(), args.grad_clip_norm)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            base_model.parameters(),
+            args.grad_clip_norm if args.grad_clip_norm > 0 else float("inf"),
+        )
         for opt in optimizers:
             opt.step()
         zero_grad_all()
@@ -188,11 +190,12 @@ def run_training(
         )
         if should_log_train:
             log0(
-                f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} lr_scale:{scale:.4f} "
+                f"step:{step}/{args.iterations} train_loss:{train_loss.item():.4f} "
+                f"grad_norm:{grad_norm.item():.4f} lr_scale:{scale:.4f} "
                 f"train_time:{approx_training_time_ms:.0f}ms step_avg:{approx_training_time_ms / step:.2f}ms"
             )
         if on_train_log is not None and step % max(args.comet_log_train_every, 1) == 0:
-            on_train_log(step, float(train_loss.item()), scale)
+            on_train_log(step, float(train_loss.item()), scale, float(grad_norm.item()))
 
         reached_cap = max_wallclock_ms is not None and approx_training_time_ms >= max_wallclock_ms
         if distributed and max_wallclock_ms is not None:
